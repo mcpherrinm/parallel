@@ -4,7 +4,7 @@ use std::mem::transmute;
 /// work is the closure to invoke on each chunk
 pub fn parallel<'data, Data> (data: &'data mut [Data], parallelism: uint, work: fn(uint, &mut [Data])) {
   let mut chunk_size = data.len() / parallelism;
-  if chunk_size*parallelism < data.len() { chunk_size += 1 }
+  if chunk_size*parallelism < data.len() || chunk_size == 0 { chunk_size += 1 }
   assert!(chunk_size*parallelism >= data.len());
 
   let mut workeridx = 0u;
@@ -25,26 +25,28 @@ pub fn parallel<'data, Data> (data: &'data mut [Data], parallelism: uint, work: 
       thistx.send(workeridx);
     });
   }
-  assert!(workeridx == parallelism);
-  for _ in range(0, parallelism) {
+  for _ in range(0, workeridx) {
     rx.recv(); // we receive one message from each job on its completion
   }
-  // After all jobs are finished, we can safely return.
-  let mut replycount = 0u;
-  println!("{}", workeridx);
 }
 
 #[test]
 fn test_parallel() {
-  let mut data = [0u, ..1024];
   fn foo(worker_id: uint, hunk: &mut [uint]) {
     for t in hunk.mut_iter() {
       *t = worker_id;
     }
   }
+  for length in range(1u, 129) {
+    for parallelism in range(1, length-1) {
+      let mut data = Vec::from_elem(length, 0u);
 
-  parallel(data.as_mut_slice(), 17, foo);
+      let slc = data.as_mut_slice();
+      parallel(slc, parallelism, foo);
 
-  println!("data is {}", data.as_slice());
-
+      for i in range(0u, length) {
+        assert!(slc[i] != 0);
+      }
+    }
+  }
 }
