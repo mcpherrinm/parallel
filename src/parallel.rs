@@ -1,28 +1,27 @@
 use std::mem::transmute;
+use std::raw::Slice;
 
-/// First try, definitely just a test and not the right API
-/// work is the closure to invoke on each chunk
+/// Run a function in parallel over chunks of an array.
 pub fn parallel<'data, Data> (data: &'data mut [Data], parallelism: uint, work: fn(uint, &mut [Data])) {
-  let mut chunk_size = data.len() / parallelism;
-  if chunk_size*parallelism < data.len() || chunk_size == 0 { chunk_size += 1 }
+  let chunk_size = (data.len() + parallelism - 1) / parallelism;
   assert!(chunk_size*parallelism >= data.len());
 
   let mut workeridx = 0u;
   let (tx, rx) = std::comm::channel();
-  for chunk in data.mut_chunks(chunk_size) {
+  for (i, chunk) in data.mut_chunks(chunk_size).enumerate() {
     workeridx += 1;
-    let thistx = tx.clone();
-    // We can't send a &mut [Data] or *Data directly, so send the pointer and
-    // length as uints
-    let raw_chunk: std::raw::Slice<Data> = unsafe { transmute(chunk) };
-    let datap: uint = unsafe { std::mem::transmute(raw_chunk.data)};
+    let this_tx = tx.clone();
+    // We are splitting up the input data into chunks, and sending them to worker tasks.  This
+    // requires unsafe code on both the parent and child tasks behalf, since we need to avoid
+    // the wrath of the type system.  This is safe since we ensure the parent blocks until all
+    // children have completed their processing.
+    let raw_chunk: Slice<Data> = unsafe { transmute(chunk) };
+    let datap = raw_chunk.data as uint;
     let datalen = raw_chunk.len;
     spawn(proc(){
-      let raw_chunk = std::raw::Slice{data: unsafe { transmute::<uint,*const uint>(datap) },
-                                      len: datalen};
-      let unraw_chunk: &mut [Data] = unsafe { transmute(raw_chunk) };
-      work(workeridx, unraw_chunk);
-      thistx.send(workeridx);
+      let chunk = unsafe{ transmute(Slice{data: transmute::<_, *const uint>(datap), len: datalen})};
+      work(i, chunk);
+      this_tx.send(());
     });
   }
   for _ in range(0, workeridx) {
